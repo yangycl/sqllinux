@@ -1,5 +1,14 @@
 {
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
+    "@isomorphic-git/lightning-fs": "^4.6.2",
     "isomorphic-git": "^1.35.1"
+  },
+  "devDependencies": {
+    "vite": "^7.2.4"
   }
 }
