@@ -1,15 +1,14 @@
-/// <reference path="fs.d.ts" />
 import LightningFS from '@isomorphic-git/lightning-fs'
 
 // 建立虛擬檔案系統
 const fs = new LightningFS('fs');
-let currentDir = "/";  // 記錄現在在哪個資料夾
-let gitBashEle = document.getElementById("gitBash") as HTMLTextAreaElement;
+let currentDir = "~";  // 記錄現在在哪個資料夾（~ 代表家目錄）
+let gitBashEle = document.getElementById("gitBash");
 
 // 網頁載入完成時，顯示第一個提示符號
 window.addEventListener("DOMContentLoaded", () => {
-    gitBashEle = document.getElementById("gitBash") as HTMLTextAreaElement;
-    if (gitBashEle) {
+    gitBashEle = document.getElementById("gitBash");
+    if (gitBashEle instanceof HTMLTextAreaElement) {
         gitBashEle.value = `${currentDir} $ `;
     }
 });
@@ -38,25 +37,35 @@ const executeCommand = async (command: string): Promise<string> => {
                 // 如果路徑開頭是 / 就是完整路徑，不是的話要加上現在的路徑
                 const dirPath = commandArgv[1].startsWith('/') 
                     ? commandArgv[1] 
-                    : `${currentDir}/${commandArgv[1]}`.replace(/\/+/g, '/');
-                // 加上 recursive 選項，確保可以建立資料夾
-                await fs.promises.mkdir(dirPath, { recursive: true });
+                    : `${currentDir === "~" ? "" : currentDir}/${commandArgv[1]}`.replace(/\/+/g, '/');
+                
+                try {
+                    await fs.promises.mkdir(dirPath);
+                } catch (error) {
+                    // 如果資料夾已經存在，不顯示錯誤
+                    if (error instanceof Error && 'code' in error && error.code !== 'EEXIST') {
+                        return `mkdir: 無法建立資料夾 '${commandArgv[1]}'`;
+                    }
+                }
                 return "";
                 
             case "echo":  // 輸出文字或寫入檔案
                 // 如果有 > 符號，就是要寫入檔案
                 // 例如: echo "哈囉" > test.txt
-                if (commandArgv.length < 4 || commandArgv[2] !== ">") {
+                const gtIndex = commandArgv.indexOf(">");
+                if (gtIndex > 0 && commandArgv.length > gtIndex + 1) {
+                    // 有 > 符號，把 echo 和 > 之間的所有文字合併
+                    const content = commandArgv.slice(1, gtIndex).join(" ").replace(/"/g, "");
+                    const filename = commandArgv[gtIndex + 1];
+                    const filePath = filename.startsWith('/') 
+                        ? filename 
+                        : `${currentDir === "~" ? "" : currentDir}/${filename}`.replace(/\/+/g, '/');
+                    await fs.promises.writeFile(filePath, content);
+                    return "";
+                } else {
                     // 沒有 > 就只是把文字印出來
                     return commandArgv.slice(1).join(" ").replace(/"/g, "");
                 }
-                const content = commandArgv[1].replace(/"/g, "");
-                const filename = commandArgv[3];
-                const filePath = filename.startsWith('/') 
-                    ? filename 
-                    : `${currentDir}/${filename}`.replace(/\/+/g, '/');
-                await fs.promises.writeFile(filePath, content);
-                return "";
                 
             case "cat":  // 讀取檔案內容
                 if (commandArgv.length < 2) {
@@ -64,9 +73,9 @@ const executeCommand = async (command: string): Promise<string> => {
                 }
                 const readPath = commandArgv[1].startsWith('/') 
                     ? commandArgv[1] 
-                    : `${currentDir}/${commandArgv[1]}`.replace(/\/+/g, '/');
+                    : `${currentDir === "~" ? "" : currentDir}/${commandArgv[1]}`.replace(/\/+/g, '/');
                 const fileContent = await fs.promises.readFile(readPath, { encoding: 'utf8' });
-                return fileContent as string;
+                return fileContent;
                 
             case "ls":  // 列出資料夾裡的檔案
                 const lsPath = commandArgv.length > 1 ? commandArgv[1] : currentDir;
@@ -75,11 +84,13 @@ const executeCommand = async (command: string): Promise<string> => {
                 
             case "cd":  // 切換資料夾
                 if (commandArgv.length < 2) {
-                    currentDir = "/";  // 沒有指定就回到根目錄
+                    currentDir = "~";  // 沒有指定就回到家目錄
+                } else if (commandArgv[1] === "~") {
+                    currentDir = "~";  // cd ~ 回到家目錄
                 } else {
                     const newDir = commandArgv[1].startsWith('/') 
                         ? commandArgv[1] 
-                        : `${currentDir}/${commandArgv[1]}`.replace(/\/+/g, '/');
+                        : `${currentDir === "~" ? "" : currentDir}/${commandArgv[1]}`.replace(/\/+/g, '/');
                     // 先確認這個資料夾存在
                     try {
                         await fs.promises.readdir(newDir);
@@ -91,10 +102,10 @@ const executeCommand = async (command: string): Promise<string> => {
                 return "";
                 
             case "pwd":  // 顯示現在在哪個資料夾
-                return currentDir;
+                return currentDir === "~" ? "~" : currentDir;
                 
             case "clear":  // 清空畫面
-                if (gitBashEle) {
+                if (gitBashEle instanceof HTMLTextAreaElement) {
                     gitBashEle.value = "";
                 }
                 return "";
@@ -110,30 +121,33 @@ const executeCommand = async (command: string): Promise<string> => {
         return `錯誤: ${error instanceof Error ? error.message : String(error)}`;
     }
 }
-
-// 當按下按鍵時（還沒放開）
-window.addEventListener("keydown", async (event: KeyboardEvent) => {
-    // 如果按的是 Enter 鍵
-    if (event.key === "Enter" && gitBashEle instanceof HTMLTextAreaElement) {
-        event.preventDefault();  // 阻止預設的換行
-        
-        // 取得最後一行的內容
-        const lines = gitBashEle.value.split("\n");
-        const lastLine = lines[lines.length - 1];
-        
-        // 找出 $ 符號後面的指令
-        // 例如: "/ $ mkdir test" 會取出 "mkdir test"
-        const promptPattern = /\$ (.*)$/;
-        const match = lastLine.match(promptPattern);
-        const command = match ? match[1].trim() : "";
-        
-        // 執行指令
-        const output = await executeCommand(command);
-        
-        // 如果有結果要顯示，就加到畫面上
-        if (output) {
+async function execALotLine(commands: string[]): Promise<void> {
+    for (let command of commands) {
+        let output = await executeCommand(command);
+        if (output && gitBashEle instanceof HTMLTextAreaElement) {
             gitBashEle.value += `\n${output}`;
         }
+    }
+}
+
+window.addEventListener("keydown", async (event: KeyboardEvent) => {
+    if (event.key === "Enter" && gitBashEle instanceof HTMLTextAreaElement) {
+        event.preventDefault();
+        
+        const lastPromptIndex = gitBashEle.value.lastIndexOf('$ ');
+        
+        if (lastPromptIndex === -1) {
+            return;
+        }
+        
+        // 取得 $ 後面的文字（+2 是跳過 "$ "）
+        const allCommands = gitBashEle.value.slice(lastPromptIndex + 2);
+        
+        // 分割成多行，去除空白，過濾空字串
+        const commands = allCommands.split("\n").map(c => c.trim()).filter(c => c !== "");
+        
+        // 執行所有指令
+        await execALotLine(commands);
     }
 });
 
